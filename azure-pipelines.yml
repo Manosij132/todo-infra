@@ -1,0 +1,155 @@
+trigger: 
+- master
+- feature/*
+
+pool: todo-pool
+
+variables:
+- group: InfraGroup
+
+stages:
+- stage: Precommit
+  displayName: Precomnmit Stage
+  jobs:
+  
+  - job: tfsecjob
+    displayName: Tfsec Job
+    continueOnError: true
+    steps:
+    - task: PowerShell@2
+      displayName: Tfsec Task
+      inputs:
+        targetType: 'inline'
+        script: "tfsec --tfvars-file=$(Work_Dir)/terraform.tfvars"
+
+  - job: TFLint
+    displayName: Tflint Job
+    continueOnError: true
+    steps:    
+    - task: PowerShell@2
+      displayName: Tflint Task
+      inputs:
+        targetType: 'inline'
+        script: 'tflint --recursive'
+        workingDirectory: '$(Work_Dir)/'
+
+  - job: Validate  
+    displayName: Validate Job
+    steps:
+    - task: TerraformTask@5
+      displayName: Init Task
+      inputs:
+        provider: 'azurerm'
+        command: 'init'
+        workingDirectory: '$(Work_Dir)/'
+        backendServiceArm: 'serv-con'
+        backendAzureRmResourceGroupName: '$(Backend_RG)'
+        backendAzureRmStorageAccountName: '$(Backend_STG)'
+        backendAzureRmContainerName: '$(Backend_CON)'
+        backendAzureRmKey: '$(Backend_KEY)'
+    - task: TerraformTask@5
+      displayName: Validate Task
+      inputs:
+        provider: 'azurerm'
+        command: 'validate'
+        workingDirectory: '$(Work_Dir)/'
+        environmentAzureRmUseIdTokenGeneration: true
+
+  - job: fmtJob
+    displayName: FMT Job
+    steps:
+    - task: TerraformTask@5
+      displayName: FMT task
+      inputs:
+        provider: 'azurerm'
+        command: 'custom'
+        workingDirectory: '$(Work_Dir)'
+        outputTo: 'console'
+        customCommand: 'fmt'
+        environmentServiceNameAzureRM: 'serv-con'
+    
+- stage: InfraCost
+  displayName: Cost Estimation Stage
+  jobs:
+  - job: InfraCostJob
+    displayName: Infra Cost Job
+    steps:
+    - task: InfracostSetup@2
+      displayName: Install Infracost Task
+      inputs:
+        apiKey: 'ico-3VY7fMVOmHcstioehL6j07VUVypYnEaT'
+        version: '0.10.x'
+    - task: PowerShell@2
+      displayName: Run Infracost Task
+      inputs:
+        targetType: 'inline'
+        script: |
+          terraform init          
+          terraform plan -out myplan.tfplan          
+          infracost configure set api_key ico-3VY7fMVOmHcstioehL6j07VUVypYnEaT          
+          infracost breakdown --path=myplan.tfplan --format table
+        workingDirectory: '$(Work_Dir)'
+
+- stage: PlanningStage
+  displayName: Planning and dry run stage
+  jobs:
+  - job: Planjob
+    displayName: Dry Run Job
+    steps:
+    - task: TerraformTask@5
+      displayName: Init Task
+      inputs:
+        provider: 'azurerm'
+        command: 'init'
+        workingDirectory: '$(Work_Dir)'
+        backendServiceArm: 'serv-con'
+        backendAzureRmResourceGroupName: '$(Backend_RG)'
+        backendAzureRmStorageAccountName: '$(Backend_STG)'
+        backendAzureRmContainerName: '$(Backend_CON)'
+        backendAzureRmKey: '$(Backend_KEY)'
+    - task: TerraformTask@5
+      displayName: Terraform Plan Task
+      inputs:
+        provider: 'azurerm'
+        command: 'plan'
+        workingDirectory: '$(Work_Dir)'
+        environmentServiceNameAzureRM: 'serv-con'
+
+- stage: manualValidationApplyStage
+  displayName: Manual Validation and Apply Stage
+  dependsOn: PlanningStage
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/master'))
+  jobs:
+  - job: manualValidationJob
+    displayName: Manual Validation Job
+    pool: server
+    steps:
+    - task: ManualValidation@1
+      displayName: Manual Validation TAsk
+      inputs:
+        notifyUsers: 'ankur.majumder96@gmail.com'
+  - job: applyjob
+    displayName: Apply Job
+    dependsOn: manualValidationJob
+    steps:
+    - task: TerraformTask@5
+      displayName: Init Task
+      inputs:
+        provider: 'azurerm'
+        command: 'init'
+        workingDirectory: '$(Work_Dir)'
+        backendServiceArm: 'serv-con'
+        backendAzureRmResourceGroupName: '$(Backend_RG)'
+        backendAzureRmStorageAccountName: '$(Backend_STG)'
+        backendAzureRmContainerName: '$(Backend_CON)'
+        backendAzureRmKey: '$(Backend_KEY)'
+    - task: TerraformTask@5
+      displayName: Apply Task
+      inputs:
+        provider: 'azurerm'
+        command: 'apply'
+        workingDirectory: '$(Work_Dir)'
+        environmentServiceNameAzureRM: 'serv-con'
+
+
+
